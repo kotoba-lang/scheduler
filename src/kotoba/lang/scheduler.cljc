@@ -4,11 +4,13 @@
   (clock + instant/duration), kotoba.lang.coll (job shaping).
 
   Models a tick loop as a pure state machine: the host advances `now` via an
-  injected `clock` (time), `tick` fires the due jobs from an `async` bounded
-  ready-queue, and `coll` shapes the job table. The host drives the loop; the
-  scheduler is a pure transition — same shape as langgraph interrupts and the
-  durable outer loop (lease/tick/budget) in CLAUDE.md. No threads, no
-  wall-clock inside the lib.
+  injected `clock` (time); `tick` fires the jobs due at `now` (found via the
+  job table) and, as it fires each one, puts it onto an `async` bounded
+  ready-queue so a host can `kotoba.lang.async/take`/`drain` the queue to
+  observe which jobs actually fired; `coll` shapes the job table. The host
+  drives the loop; the scheduler is a pure transition — same shape as
+  langgraph interrupts and the durable outer loop (lease/tick/budget) in
+  CLAUDE.md. No threads, no wall-clock inside the lib.
 
   Zero third-party runtime deps; .cljc (JVM / SCI / CLJS / GraalVM / kotoba-WASM)."
   (:require [kotoba.lang.async :as a]
@@ -33,25 +35,25 @@
 
 (defn at
   "Schedule a one-shot job `id` to fire at instant `at` (a time instant), with
-  `f` called as `(f now)`."
+  `f` called as `(f now)`. Scheduling does not touch :ready-queue — a job is
+  only put onto the ready-queue by `tick`, once it actually fires (see
+  tick's docstring)."
   [sch id at f]
   (let [job (shape-job {:id id :at at :fn f})]
-    (-> sch
-        (update :jobs assoc id job)
-        (update :ready-queue (fn [q] (first (a/put q job)))))))
+    (update sch :jobs assoc id job)))
 
 (defn every
   "Schedule a recurring job `id` that fires every `interval` (a time duration),
   starting at `:start` (defaults to now via the injected clock). `f` is called
   as `(f now)`. Options are passed as trailing key/value pairs, e.g.
-  `(every s :b interval f :start instant)`."
+  `(every s :b interval f :start instant)`. Scheduling does not touch
+  :ready-queue — a job is only put onto the ready-queue by `tick`, once it
+  actually fires (see tick's docstring)."
   ([sch id interval f & opts]
    (let [opts (apply hash-map opts)
          start (or (:start opts) (t/instant ((:clock sch))))
          job (shape-job {:id id :at start :fn f :interval? interval})]
-     (-> sch
-         (update :jobs assoc id job)
-         (update :ready-queue (fn [q] (first (a/put q job))))))))
+     (update sch :jobs assoc id job))))
 
 (defn due?
   "True iff any job is due at `now` (an epoch-millis or instant). Returns a
@@ -71,7 +73,17 @@
 (defn tick
   "Fire all jobs due at `now`. Returns `[sch' fired]` where `fired` is a vector
   of the results of each job's `f` called with `now` (coerced to an instant).
-  Interval jobs are re-enqueued at `at + interval`; one-shot jobs are removed."
+  Interval jobs are re-enqueued at `at + interval`; one-shot jobs are removed.
+
+  Each due job is also put onto :ready-queue (an async bounded channel) as
+  `{:id :at :fired-at}`, in fire order, via `kotoba.lang.async/put` — a host
+  can `a/take`/`a/drain` the queue to observe which jobs actually fired at
+  this or a prior tick, the library's documented async-consumer contract.
+  Previously `at`/`every` put the raw job onto :ready-queue at SCHEDULE time
+  (before it was ever due), so the queue accumulated schedule-time noise a
+  bounded :dropping channel would silently truncate, and nothing in this
+  namespace ever drained it — a confirmed dead/lossy write path, now wired
+  to fire-time instead."
   [sch now]
   (let [n (if (:time/instant now) now (t/instant now))
         due (due-jobs sch n)]
@@ -85,8 +97,12 @@
                        (let [next-at (t/add (:at job) ival)]
                          (assoc acc id (assoc job :at next-at)))
                        (dissoc acc id)))                       ; drop one-shot
-                   (:jobs sch) due)]
-        [(assoc sch :jobs jobs') fired]))))
+                   (:jobs sch) due)
+            ready-queue' (reduce
+                          (fn [q [id job]]
+                            (first (a/put q {:id id :at (:at job) :fired-at n})))
+                          (:ready-queue sch) due)]
+        [(assoc sch :jobs jobs' :ready-queue ready-queue') fired]))))
 
 (defn cancel
   "Remove job `id` from the scheduler."

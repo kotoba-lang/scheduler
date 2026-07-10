@@ -1,5 +1,6 @@
 (ns kotoba.lang.scheduler-test
   (:require [clojure.test :refer [deftest is testing]]
+            [kotoba.lang.async :as a]
             [kotoba.lang.scheduler :as sch]
             [kotoba.lang.time :as t]))
 
@@ -54,3 +55,35 @@
               (sch/at :early (t/instant 500)  (fn [now] [:early (:time/instant now)])))]
     (let [[_s' fired] (sch/tick s 2000)]
       (is (= [[:early 2000] [:late 2000]] fired)))))
+
+(deftest at-does-not-touch-ready-queue-at-schedule-time
+  (testing "confirmed bug regression: scheduling a job (even one due far in the future)
+            must not put anything onto :ready-queue -- a job only belongs on the
+            ready-queue once tick actually fires it, not at schedule time"
+    (let [s (sch/scheduler (clock-fn (atom 0)))
+          s' (sch/at s :far (t/instant 1000000) (fn [_] :x))]
+      (is (empty? (:buffer (:ready-queue s')))))))
+
+(deftest tick-puts-fired-jobs-onto-ready-queue
+  (testing "confirmed bug regression: a job that actually fires via tick must appear on
+            :ready-queue so a host can a/take or a/drain it to observe what fired --
+            the ready-queue was previously a dead write-only path nothing ever drained"
+    (let [s (sch/scheduler (clock-fn (atom 0)))
+          s (sch/at s :a (t/instant 1000) (fn [_] :x))
+          [s' _fired] (sch/tick s 1000)
+          [_ ready] (a/drain (:ready-queue s'))]
+      (is (= 1 (count ready)))
+      (is (= :a (:id (first ready))))
+      (is (= 1000 (:time/instant (:fired-at (first ready))))))))
+
+(deftest ready-queue-does-not-overflow-with-schedule-time-noise
+  (testing "confirmed bug regression: scheduling many far-future jobs (none due) must
+            never fill the bounded :ready-queue -- previously 100 far-future jobs
+            silently overflowed a capacity-64 :dropping channel with schedule-time
+            noise that never reflected due/fired status"
+    (let [s (sch/scheduler (clock-fn (atom 0)))
+          s (reduce (fn [acc i] (sch/at acc (keyword (str "j" i)) (t/instant (+ 2000000 i)) (fn [_] i)))
+                    s (range 100))]
+      (is (zero? (count (:buffer (:ready-queue s)))))
+      (is (= 100 (count (:jobs s)))
+          "all 100 jobs are still correctly tracked and will fire on schedule"))))
