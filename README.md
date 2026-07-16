@@ -36,6 +36,24 @@ durable outer loop in `CLAUDE.md`.
 A job is `{:id :at :fn :interval?}`. `tick` drains the due jobs (firing each
 `fn` with `now`), re-enqueues interval jobs at `at + interval`.
 
+`kotoba.lang.scheduler.driver` — a durable-outer-loop REFERENCE DRIVER
+threading `scheduler`+`async`+`time` end-to-end (lease/tick/budget/
+checkpoint), the concrete example this README described only in prose
+above until now:
+
+- `lease` / `lease-valid?` — a fencing token (`{:holder :epoch}`) and the
+  "higher epoch wins" check a host runs before trusting a checkpoint
+- `checkpoint` — `{:scheduler :budget :lease}`; `:budget`/`:lease` are
+  plain EDN, `:scheduler` carries the host-injected clock/job-callback
+  fns (see its docstring for why that's not a gap this driver invents)
+- `run-tick!` — one durable-outer-loop step: fires due jobs via
+  `scheduler/tick` and spends the budget by the COUNT OF JOBS ACTUALLY
+  FIRED (an idle tick with nothing due never starves a waiting loop);
+  stops firing once the budget is exhausted
+- `exhausted?` — a checkpoint's own stop condition, for the host's loop
+- `drain-ready!` — drains the checkpoint's ready-queue, observing what
+  fired across one or many prior ticks
+
 ## Install
 
 ```clojure
@@ -55,6 +73,25 @@ io.github.kotoba-lang/scheduler {:git/sha "<sha>"}
       (sch/every :b (t/seconds 500) (fn [now] (println "tick" now)) :start (t/instant 500))
       (sch/tick 499)   ;=> nothing due
       (sch/tick 500))  ;=> fires :b once, re-enqueues at 1000
+```
+
+A durable outer loop, using `kotoba.lang.scheduler.driver`:
+
+```clojure
+(require '[kotoba.lang.scheduler :as sch]
+         '[kotoba.lang.scheduler.driver :as d]
+         '[kotoba.lang.time :as t])
+
+(let [clock (fn [] 0)
+      s (sch/every (sch/scheduler clock) :heartbeat (t/seconds 1)
+                   (fn [now] (println "beat" now)) :start (t/instant 1000))
+      ;; a host claims a lease (however it likes) before driving the loop
+      ckpt (d/checkpoint s 10 (d/lease "worker-1" 1))]
+  (loop [ckpt ckpt now 1000]
+    (when-not (d/exhausted? ckpt)
+      (let [[ckpt' _fired] (d/run-tick! ckpt (t/instant now))]
+        ;; persist ckpt' however the host likes here, then continue
+        (recur ckpt' (+ now 1000))))))
 ```
 
 ## Verify
