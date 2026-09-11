@@ -97,5 +97,5 @@ A durable outer loop, using `kotoba.lang.scheduler.driver`:
 ## Verify
 
 ```sh
-clojure -M:test
+kbb -M:test
 ```
