@@ -1,5 +1,5 @@
 (ns kotoba.lang.scheduler-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [kotoba.lang.async :as a]
             [kotoba.lang.scheduler :as sch]
             [kotoba.lang.time :as t]))
