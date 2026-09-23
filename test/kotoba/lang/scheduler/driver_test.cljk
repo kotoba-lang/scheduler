@@ -1,5 +1,5 @@
 (ns kotoba.lang.scheduler.driver-test
-  (:require [clojure.edn :as edn]
+  (:require [kotoba.lang.edn :as edn]
             [kotoba.test :refer [deftest is testing]]
             [kotoba.lang.scheduler :as sch]
             [kotoba.lang.scheduler.driver :as d]
