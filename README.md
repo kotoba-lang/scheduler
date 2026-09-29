@@ -20,7 +20,7 @@ loop as a pure state machine: the host advances `now` (an injected `clock`
 from `kotoba.lang.time`), `tick` fires the due jobs from an `async` bounded
 ready-queue, and `coll` shapes the job table. The host drives the loop; the
 scheduler is pure transition — same shape as `langgraph` interrupts and the
-durable outer loop in `CLAUDE.md`.
+durable outer loop in `AGENTS.md`.
 
 ## Current surface
 

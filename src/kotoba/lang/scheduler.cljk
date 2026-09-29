@@ -10,7 +10,7 @@
   observe which jobs actually fired; `coll` shapes the job table. The host
   drives the loop; the scheduler is a pure transition — same shape as
   langgraph interrupts and the durable outer loop (lease/tick/budget) in
-  CLAUDE.md. No threads, no wall-clock inside the lib.
+  AGENTS.md. No threads, no wall-clock inside the lib.
 
   Zero third-party runtime deps; .cljc (JVM / SCI / CLJS / GraalVM / kotoba-WASM)."
   (:require [kotoba.lang.async :as a]
